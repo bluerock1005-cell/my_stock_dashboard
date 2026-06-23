@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "运行GUI股价监控",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/gui.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "运行命令行股价监控",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/stock_monitor.py",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

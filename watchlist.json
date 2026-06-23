@@ -1,0 +1,23 @@
+[
+  {
+    "code": "159870",
+    "upper": 0.945,
+    "lower": 0.835,
+    "sell_qty": 400,
+    "buy_qty": 8900
+  },
+  {
+    "code": "512880",
+    "upper": 1.299,
+    "lower": 1.031,
+    "sell_qty": 250,
+    "buy_qty": 25
+  },
+  {
+    "code": "159938",
+    "upper": null,
+    "lower": 0.5,
+    "sell_qty": null,
+    "buy_qty": 600
+  }
+]
