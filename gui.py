@@ -24,7 +24,16 @@ import alerter
 import formatter
 
 if getattr(sys, "frozen", False):
-    WATCHLIST_FILE = Path(sys.executable).parent / "watchlist.json"
+    # PyInstaller onedir：数据文件在 _internal/ 目录，但需要可写
+    BASE_DIR = Path(sys._MEIPASS)
+    USER_FILE = Path(sys.executable).parent / "watchlist.json"
+    # 首次运行：从 _internal 复制默认配置到 exe 同目录
+    if not USER_FILE.exists():
+        _default = BASE_DIR / "watchlist.json"
+        if _default.exists():
+            import shutil
+            shutil.copy(_default, USER_FILE)
+    WATCHLIST_FILE = USER_FILE
 else:
     WATCHLIST_FILE = Path(__file__).parent / "watchlist.json"
 

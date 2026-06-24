@@ -65,7 +65,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,      # 不显示黑色命令行窗口
+    console=False,
     icon=None,
 )
 
