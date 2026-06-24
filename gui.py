@@ -3,6 +3,7 @@
 
 import sys
 import json
+import re
 import ast
 import operator
 import traceback
@@ -22,7 +23,10 @@ import fetcher
 import alerter
 import formatter
 
-WATCHLIST_FILE = Path(__file__).parent / "watchlist.json"
+if getattr(sys, "frozen", False):
+    WATCHLIST_FILE = Path(sys.executable).parent / "watchlist.json"
+else:
+    WATCHLIST_FILE = Path(__file__).parent / "watchlist.json"
 
 
 # ---- 安全算术表达式求值 ----
@@ -68,12 +72,19 @@ def load_watchlist() -> list:
             with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if data and isinstance(data[0], str):
-                return [{"code": c, "upper": None, "lower": None,
-                         "sell_qty": None, "buy_qty": None} for c in data]
-            for item in data:
-                item.setdefault("sell_qty", None)
-                item.setdefault("buy_qty", None)
-            return data
+                stocks = [{"code": c, "upper": None, "lower": None,
+                           "sell_qty": None, "buy_qty": None} for c in data]
+            else:
+                stocks = data
+                for item in stocks:
+                    item.setdefault("sell_qty", None)
+                    item.setdefault("buy_qty", None)
+            # 确保都有 sort_order，然后按序号排序
+            for i, s in enumerate(stocks):
+                if not isinstance(s.get("sort_order"), (int, float)):
+                    s["sort_order"] = i + 1
+            stocks.sort(key=lambda s: s["sort_order"])
+            return stocks
         except Exception:
             pass
     return list(config.STOCKS)
@@ -81,8 +92,10 @@ def load_watchlist() -> list:
 
 def save_watchlist(stocks: list) -> None:
     try:
-        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
+        tmp = WATCHLIST_FILE.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(stocks, f, ensure_ascii=False, indent=2)
+        tmp.replace(WATCHLIST_FILE)
     except Exception:
         pass
 
@@ -107,25 +120,26 @@ class FetchThread(QThread):
 
 class StockMonitor(QMainWindow):
 
-    COL_CODE      = 0
-    COL_NAME      = 1
-    COL_PRICE     = 2
-    COL_PCT       = 3
-    COL_AMT       = 4
-    COL_VOL       = 5
-    COL_TURNOVER  = 6
-    COL_BUY       = 7
-    COL_BUY_QTY   = 8
-    COL_SELL      = 9
-    COL_SELL_QTY  = 10
-    COL_BUY_ALT   = 11
-    COL_SELL_ALT  = 12
+    COL_ORDER    = 0
+    COL_CODE     = 1
+    COL_NAME     = 2
+    COL_PRICE    = 3
+    COL_PCT      = 4
+    COL_AMT      = 5
+    COL_VOL      = 6
+    COL_TURNOVER = 7
+    COL_BUY      = 8
+    COL_BUY_QTY  = 9
+    COL_SELL     = 10
+    COL_SELL_QTY = 11
+    COL_BUY_ALT  = 12
+    COL_SELL_ALT = 13
 
-    EDITABLE_COLS = {COL_SELL, COL_SELL_QTY, COL_BUY, COL_BUY_QTY}
+    EDITABLE_COLS = {COL_ORDER, COL_SELL, COL_SELL_QTY, COL_BUY, COL_BUY_QTY}
     FLASH_COLS    = {COL_CODE, COL_NAME, COL_PRICE, COL_PCT, COL_AMT,
                      COL_VOL, COL_TURNOVER, COL_SELL_ALT, COL_BUY_ALT}
 
-    COLUMNS = ["股票代码", "名称", "最新价", "涨跌幅", "涨跌额",
+    COLUMNS = ["#", "股票代码", "名称", "最新价", "涨跌幅", "涨跌额",
                "成交量", "成交额", "买入价", "买入数量", "卖出价", "卖出数量",
                "买入状态", "卖出状态"]
 
@@ -150,6 +164,7 @@ class StockMonitor(QMainWindow):
         self._fail_count = 0
         self._flash_state = False
         self._alerted_rows: dict = {}
+        self._paused = False
 
         # 编辑保护：正在编辑时完全跳过表格重建和网络请求
         self._editing = False
@@ -166,7 +181,7 @@ class StockMonitor(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _init_ui(self):
-        self.setWindowTitle("A股实时行情监控")
+        self.setWindowTitle("网格行情监控")
         self.setMinimumSize(1200, 460)
         self.resize(1400, 560)
         self.setStyleSheet(self._make_stylesheet())
@@ -178,17 +193,21 @@ class StockMonitor(QMainWindow):
         layout.setSpacing(8)
 
         top = QHBoxLayout()
-        title = QLabel("A股实时行情监控")
+        title = QLabel("网格行情监控")
         title.setFont(QFont("Microsoft YaHei", 15, QFont.Weight.Bold))
         title.setStyleSheet("color: #88CCFF;")
         self.status_label = QLabel("正在加载…")
         self.status_label.setStyleSheet("color: #AAAACC; font-size: 12px;")
+        self.pause_btn = QPushButton("暂停刷新")
+        self.pause_btn.setFixedWidth(90)
+        self.pause_btn.clicked.connect(self._toggle_pause)
         self.refresh_btn = QPushButton("立即刷新")
         self.refresh_btn.setFixedWidth(90)
         self.refresh_btn.clicked.connect(self._do_fetch)
         top.addWidget(title)
         top.addStretch()
         top.addWidget(self.status_label)
+        top.addWidget(self.pause_btn)
         top.addWidget(self.refresh_btn)
         layout.addLayout(top)
 
@@ -228,7 +247,8 @@ class StockMonitor(QMainWindow):
         self.progress_bar.setFixedHeight(18)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("准备就绪")
-        self.progress_bar.hide()
+        self.progress_bar.setValue(0)
+        # 始终显示，避免 hide/show 导致表格上下跳动
 
         self.countdown_label = QLabel("")
         self.countdown_label.setFixedWidth(90)
@@ -250,6 +270,7 @@ class StockMonitor(QMainWindow):
         h = self.table.horizontalHeader()
         h.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         col_widths = [
+            (self.COL_ORDER, 45),
             (self.COL_CODE, 90), (self.COL_NAME, 110),
             (self.COL_BUY, 85), (self.COL_BUY_QTY, 85),
             (self.COL_SELL, 85), (self.COL_SELL_QTY, 85),
@@ -261,6 +282,7 @@ class StockMonitor(QMainWindow):
 
         self.table.itemDoubleClicked.connect(self._on_cell_double_clicked)
         self.table.itemChanged.connect(self._on_item_changed)
+        self.table.itemDelegate().closeEditor.connect(self._on_editor_closed)
 
         layout.addWidget(self.table)
         self._update_status_bar()
@@ -344,6 +366,15 @@ class StockMonitor(QMainWindow):
         except Exception:
             pass
 
+    def _on_editor_closed(self, editor, hint):
+        """编辑器关闭时（无论是否修改），释放编辑锁"""
+        try:
+            self._editing = False
+            self._editing_row = -1
+            self._editing_col = -1
+        except Exception:
+            pass
+
     def _on_item_changed(self, item: QTableWidgetItem):
         """
         编辑提交后同步处理（不含延迟）。
@@ -365,6 +396,12 @@ class StockMonitor(QMainWindow):
             self._editing_col = -1
 
             text = item.text().strip()
+
+            # ---- 序号列：移动该行到指定位置 ----
+            if col == self.COL_ORDER:
+                self._handle_order_edit(item, row, text)
+                return
+
             is_qty = col in (self.COL_SELL_QTY, self.COL_BUY_QTY)
 
             # 取旧值（出错了恢复）
@@ -432,6 +469,36 @@ class StockMonitor(QMainWindow):
             self._editing_row = -1
             self._editing_col = -1
 
+    def _handle_order_edit(self, item: QTableWidgetItem, row: int, text: str):
+        """用户编辑序号列：把该行移到目标位置，然后整体重新编号（不拉取行情）。"""
+        try:
+            new_pos = int(text) if text else None
+            if new_pos is None or new_pos < 1 or new_pos > len(self.stocks):
+                # 无效输入 → 恢复原序号
+                item.blockSignals(True)
+                item.setText(str(self.stocks[row].get("sort_order", row + 1)))
+                item.blockSignals(False)
+                return
+            # 取出该股票，插入到目标位置
+            target = self.stocks.pop(row)
+            self.stocks.insert(new_pos - 1, target)
+            self._renumber_stocks()
+            self.codes = [s["code"] for s in self.stocks]
+            save_watchlist(self.stocks)
+            # 同步 _last_rows 顺序，然后仅重建表格，不发网络请求
+            if self._last_rows:
+                code_order = {code: i for i, code in enumerate(self.codes)}
+                self._last_rows.sort(key=lambda r: code_order.get(str(r.get("代码", "")), 9999))
+            self._last_alerts = alerter.check_all(self._last_rows, self.stocks)
+            QTimer.singleShot(0, lambda: self._populate_table(self._last_rows, self._last_alerts))
+        except Exception:
+            pass
+
+    def _renumber_stocks(self):
+        """把 self.stocks 中每项的 sort_order 重新编号为 1, 2, 3, …"""
+        for i, s in enumerate(self.stocks):
+            s["sort_order"] = i + 1
+
     def _restore_status_text(self):
         try:
             self.status_label.setStyleSheet("color: #AAAACC; font-size: 12px;")
@@ -459,8 +526,17 @@ class StockMonitor(QMainWindow):
         """每秒更新「距下次刷新 Xs」标签"""
         try:
             if self._fetching:
-                self.countdown_label.setText("获取中…")
+                self.countdown_label.setText("刷新中…")
+                self.countdown_label.setStyleSheet(
+                    "color: #88CCFF; font-size: 11px;" if not self._paused
+                    else "color: #FFAA44; font-size: 11px;"
+                )
                 return
+            if self._paused:
+                self.countdown_label.setText("⏸ 已暂停")
+                self.countdown_label.setStyleSheet("color: #FFAA44; font-size: 11px;")
+                return
+            self.countdown_label.setStyleSheet("color: #6666AA; font-size: 11px;")
             remaining = self._timer.remainingTime()
             if remaining < 0:
                 self.countdown_label.setText("")
@@ -469,6 +545,31 @@ class StockMonitor(QMainWindow):
             self.countdown_label.setText(f"下次刷新 {secs}s")
         except Exception:
             pass
+
+    def _toggle_pause(self):
+        """暂停/恢复自动刷新。手动刷新不受影响。"""
+        self._paused = not self._paused
+        if self._paused:
+            self._timer.stop()
+            self._countdown_timer.stop()
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("已暂停")
+            self.pause_btn.setText("恢复刷新")
+            self.pause_btn.setStyleSheet(
+                "background-color: #663322; color: #FFAA44; "
+                "border: 1px solid #AA6644; font-weight: bold;"
+            )
+            self.countdown_label.setText("⏸ 已暂停")
+            self.countdown_label.setStyleSheet("color: #FFAA44; font-size: 11px;")
+        else:
+            self._timer.start()
+            self._countdown_timer.start()
+            self.pause_btn.setText("暂停刷新")
+            self.pause_btn.setStyleSheet("")
+            self.countdown_label.setStyleSheet("color: #6666AA; font-size: 11px;")
+            # 恢复后立即刷新一次
+            self._do_fetch()
 
     def _start_flash_timer(self):
         self._flash_timer = QTimer(self)
@@ -501,7 +602,8 @@ class StockMonitor(QMainWindow):
                 self.code_input.clear()
                 return
             self.stocks.append({"code": code, "upper": None, "lower": None,
-                                     "sell_qty": None, "buy_qty": None})
+                                     "sell_qty": None, "buy_qty": None,
+                                     "sort_order": len(self.stocks) + 1})
             self.codes = [s["code"] for s in self.stocks]
             save_watchlist(self.stocks)
             self.code_input.clear()
@@ -532,7 +634,7 @@ class StockMonitor(QMainWindow):
     def _update_status_bar(self):
         try:
             self.statusBar().showMessage(
-                f"监控 {len(self.codes)} 只股票  |  刷新间隔 {config.REFRESH_INTERVAL} 秒  |  输入代码后回车添加"
+                f"监控 {len(self.codes)} 只股票  |  刷新间隔 {config.REFRESH_INTERVAL} 秒  |  双击 # 列输入序号排序"
             )
         except Exception:
             pass
@@ -543,10 +645,10 @@ class StockMonitor(QMainWindow):
             return
         self._fetching = True
         self.refresh_btn.setEnabled(False)
-        # 脉冲模式：setRange(0,0) 让进度条显示无限滚动动画
-        self.progress_bar.setRange(0, 0)
-        self.progress_bar.setFormat("正在获取行情…")
-        self.progress_bar.show()
+        if not self._paused:
+            # 脉冲模式：setRange(0,0) 让进度条显示无限滚动动画
+            self.progress_bar.setRange(0, 0)
+            self.progress_bar.setFormat("正在获取行情…")
         self._fetch_thread = FetchThread(self.codes)
         self._fetch_thread.progress.connect(self._on_fetch_progress)
         self._fetch_thread.data_ready.connect(self._on_data_ready)
@@ -555,8 +657,8 @@ class StockMonitor(QMainWindow):
     def _on_fetch_progress(self, percent: int, text: str):
         """接收 FetchThread 的阶段文字，脉冲模式下只更新文字和状态标签"""
         try:
-            # 脉冲模式（range=0,0）下 setValue 无意义，只更新文字
-            self.progress_bar.setFormat(f"  {text}")
+            if not self._paused:
+                self.progress_bar.setFormat(f"  {text}")
             self.status_label.setText(text)
         except Exception:
             pass
@@ -565,14 +667,19 @@ class StockMonitor(QMainWindow):
         try:
             self._fetching = False
             self.refresh_btn.setEnabled(True)
-            # 切回确定模式，闪一下 100% 再隐藏
-            self.progress_bar.setRange(0, 100)
-            self.progress_bar.setValue(100)
-            self.progress_bar.setFormat("  更新完成")
-            QTimer.singleShot(1200, self.progress_bar.hide)
+            if not self._paused:
+                # 切回确定模式，闪一下 100% 再隐藏
+                self.progress_bar.setRange(0, 100)
+                self.progress_bar.setValue(100)
+                self.progress_bar.setFormat("  更新完成")
+                QTimer.singleShot(1200, lambda: (
+                    self.progress_bar.setValue(0),
+                    self.progress_bar.setFormat("准备就绪")
+                ))
             now = datetime.now().strftime("%H:%M:%S")
 
-            if error_msg:
+            if df.empty and error_msg:
+                # 完全失败：无数据 + 有错误 → 累加失败计数
                 self._fail_count += 1
                 self.status_label.setStyleSheet("color: #FFAA44; font-size: 12px;")
                 if self._fail_count >= 3:
@@ -582,12 +689,37 @@ class StockMonitor(QMainWindow):
                     self.status_label.setText(f"⚠ 更新失败（第{self._fail_count}次），显示缓存  {now}")
                 self._populate_table(self._last_rows, self._last_alerts)
             else:
+                # 成功 或 部分成功（部分代码未找到但有数据）
                 self._fail_count = 0
-                if not self._timer.isActive():
+                if not self._timer.isActive() and not self._paused:
                     self._timer.start()
-                self.status_label.setText(f"更新时间：{now}")
-                self.status_label.setStyleSheet("color: #88CC88; font-size: 12px;")
+                if error_msg:
+                    self.status_label.setText(f"⚠ {error_msg}  {now}")
+                    self.status_label.setStyleSheet("color: #FFAA44; font-size: 12px;")
+                else:
+                    self.status_label.setText(f"更新时间：{now}")
+                    self.status_label.setStyleSheet("color: #88CC88; font-size: 12px;")
                 rows = df.to_dict("records") if not df.empty else []
+
+                # 自动清理无效代码（接口返回"未找到"的）
+                if error_msg:
+                    missing = set()
+                    for m in re.finditer(r"未找到(?:个股|ETF)[：:](.+?)(?:；|$)", error_msg):
+                        missing.update(c.strip() for c in m.group(1).split("、") if c.strip())
+                    if missing:
+                        before = len(self.codes)
+                        self.stocks = [s for s in self.stocks if s["code"] not in missing]
+                        self.codes = [s["code"] for s in self.stocks]
+                        # 同步清理 _last_rows
+                        self._last_rows = [r for r in self._last_rows
+                                           if str(r.get("代码", "")) not in missing]
+                        self._renumber_stocks()
+                        save_watchlist(self.stocks)
+                        removed = before - len(self.codes)
+                        if removed:
+                            self.status_label.setText(
+                                f"🗑 已自动删除 {removed} 个无效代码（{', '.join(sorted(missing))}）  {now}")
+
                 alerts = alerter.check_all(rows, self.stocks)
                 self._last_rows = rows
                 self._last_alerts = alerts
@@ -635,6 +767,7 @@ class StockMonitor(QMainWindow):
                     pct = 0.0
                 fg = self.COLOR_UP if pct > 0 else (self.COLOR_DOWN if pct < 0 else self.COLOR_FLAT)
 
+                center = Qt.AlignmentFlag.AlignCenter
                 right = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
                 price_str = self._fmt_price(row.get("最新价"))
@@ -648,6 +781,7 @@ class StockMonitor(QMainWindow):
                     amt_str = str(row.get("涨跌额", ""))
 
                 cfg = next((s for s in self.stocks if s["code"] == code), {})
+                order_str   = str(cfg.get("sort_order", r_idx + 1))
                 upper_str   = self._fmt_price(cfg.get("upper"))  if cfg.get("upper")  is not None else ""
                 sell_qty_str = formatter.fmt_qty(cfg.get("sell_qty")) if cfg.get("sell_qty") is not None else ""
                 lower_str   = self._fmt_price(cfg.get("lower"))  if cfg.get("lower")  is not None else ""
@@ -670,14 +804,15 @@ class StockMonitor(QMainWindow):
                     it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     return it
 
-                def make_editable(text):
+                def make_editable(text, align=right):
                     it = QTableWidgetItem(str(text) if text is not None else "")
-                    it.setTextAlignment(right)
+                    it.setTextAlignment(align)
                     it.setBackground(self.COLOR_EDITABLE)
                     it.setForeground(QColor("#AAFFAA"))
                     it.setFlags(it.flags() | Qt.ItemFlag.ItemIsEditable)
                     return it
 
+                self.table.setItem(r_idx, self.COL_ORDER,   make_editable(order_str, align=center))
                 self.table.setItem(r_idx, self.COL_CODE,     make_cell(code))
                 self.table.setItem(r_idx, self.COL_NAME,     make_cell(str(row.get("名称", ""))))
                 self.table.setItem(r_idx, self.COL_PRICE,    make_cell(price_str, align=right, fg_color=fg, bold=True))
