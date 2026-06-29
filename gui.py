@@ -13,7 +13,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTableWidget, QTableWidgetItem, QLabel, QPushButton, QHeaderView,
-    QStatusBar, QLineEdit, QMessageBox, QProgressBar,
+    QStatusBar, QLineEdit, QMessageBox, QProgressBar, QComboBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor, QFont
@@ -82,12 +82,13 @@ def load_watchlist() -> list:
                 data = json.load(f)
             if data and isinstance(data[0], str):
                 stocks = [{"code": c, "upper": None, "lower": None,
-                           "sell_qty": None, "buy_qty": None} for c in data]
+                           "sell_qty": None, "buy_qty": None, "note": None} for c in data]
             else:
                 stocks = data
                 for item in stocks:
                     item.setdefault("sell_qty", None)
                     item.setdefault("buy_qty", None)
+                    item.setdefault("note", None)
             # 确保都有 sort_order，然后按序号排序
             for i, s in enumerate(stocks):
                 if not isinstance(s.get("sort_order"), (int, float)):
@@ -143,14 +144,15 @@ class StockMonitor(QMainWindow):
     COL_SELL_QTY = 11
     COL_BUY_ALT  = 12
     COL_SELL_ALT = 13
+    COL_NOTE     = 14
 
-    EDITABLE_COLS = {COL_ORDER, COL_SELL, COL_SELL_QTY, COL_BUY, COL_BUY_QTY}
+    EDITABLE_COLS = {COL_ORDER, COL_SELL, COL_SELL_QTY, COL_BUY, COL_BUY_QTY, COL_NOTE}
     FLASH_COLS    = {COL_CODE, COL_NAME, COL_PRICE, COL_PCT, COL_AMT,
                      COL_VOL, COL_TURNOVER, COL_SELL_ALT, COL_BUY_ALT}
 
     COLUMNS = ["#", "股票代码", "名称", "最新价", "涨跌幅", "涨跌额",
                "成交量", "成交额", "买入价", "买入数量", "卖出价", "卖出数量",
-               "买入状态", "卖出状态"]
+               "买入状态", "卖出状态", "笔记"]
 
     COLOR_UP        = QColor("#FF4444")
     COLOR_DOWN      = QColor("#22AA44")
@@ -174,6 +176,7 @@ class StockMonitor(QMainWindow):
         self._flash_state = False
         self._alerted_rows: dict = {}
         self._paused = False
+        self._refresh_interval = config.REFRESH_INTERVAL
 
         # 编辑保护：正在编辑时完全跳过表格重建和网络请求
         self._editing = False
@@ -213,9 +216,20 @@ class StockMonitor(QMainWindow):
         self.refresh_btn = QPushButton("立即刷新")
         self.refresh_btn.setFixedWidth(90)
         self.refresh_btn.clicked.connect(self._do_fetch)
+        self.interval_label = QLabel("刷新间隔：")
+        self.interval_label.setStyleSheet("color: #CCCCDD; font-size: 12px;")
+        self.interval_combo = QComboBox()
+        self.interval_combo.setFixedWidth(70)
+        self.interval_combo.addItems(["5秒", "10秒", "15秒", "30秒", "60秒"])
+        idx = self.interval_combo.findText(f"{self._refresh_interval}秒")
+        if idx >= 0:
+            self.interval_combo.setCurrentIndex(idx)
+        self.interval_combo.currentTextChanged.connect(self._on_interval_changed)
         top.addWidget(title)
         top.addStretch()
         top.addWidget(self.status_label)
+        top.addWidget(self.interval_label)
+        top.addWidget(self.interval_combo)
         top.addWidget(self.pause_btn)
         top.addWidget(self.refresh_btn)
         layout.addLayout(top)
@@ -234,7 +248,7 @@ class StockMonitor(QMainWindow):
         self.del_btn.setFixedWidth(90)
         self.del_btn.clicked.connect(self._delete_selected)
 
-        hint = QLabel("💡 双击「买入价/卖出价/数量」格子可编辑；支持表达式如 500/2 或 =500/2，回车得 250")
+        hint = QLabel("💡 双击「买入价/卖出价/数量/笔记」格子可编辑；价格支持表达式如 500/2 或 =500/2，回车得 250")
         hint.setStyleSheet("color: #8888AA; font-size: 12px;")
 
         input_row.addWidget(input_label)
@@ -284,6 +298,7 @@ class StockMonitor(QMainWindow):
             (self.COL_BUY, 85), (self.COL_BUY_QTY, 85),
             (self.COL_SELL, 85), (self.COL_SELL_QTY, 85),
             (self.COL_BUY_ALT, 130), (self.COL_SELL_ALT, 130),
+            (self.COL_NOTE, 200),
         ]
         for col, width in col_widths:
             h.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
@@ -337,6 +352,26 @@ class StockMonitor(QMainWindow):
                 font-size: 13px;
             }}
             QLineEdit:focus {{ border: 1px solid #88CCFF; }}
+            QComboBox {{
+                background-color: #2A2A3E;
+                color: #EEEEEE;
+                border: 1px solid #5A5A8A;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 12px;
+            }}
+            QComboBox:hover {{ border: 1px solid #88CCFF; }}
+            QComboBox QAbstractItemView {{
+                background-color: #2A2A3E;
+                color: #EEEEEE;
+                selection-background-color: #4A4A7E;
+                border: 1px solid #5A5A8A;
+                outline: none;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
             QStatusBar {{ font-size: 12px; color: #888899; }}
             QProgressBar {{
                 background-color: #1A1A2E;
@@ -409,6 +444,12 @@ class StockMonitor(QMainWindow):
             # ---- 序号列：移动该行到指定位置 ----
             if col == self.COL_ORDER:
                 self._handle_order_edit(item, row, text)
+                return
+
+            # 笔记列：自由文本，直接保存
+            if col == self.COL_NOTE:
+                self.stocks[row]["note"] = text if text else None
+                QTimer.singleShot(0, lambda: save_watchlist(self.stocks))
                 return
 
             is_qty = col in (self.COL_SELL_QTY, self.COL_BUY_QTY)
@@ -521,7 +562,7 @@ class StockMonitor(QMainWindow):
 
     def _start_auto_refresh(self):
         self._timer = QTimer(self)
-        self._timer.setInterval(config.REFRESH_INTERVAL * 1000)
+        self._timer.setInterval(self._refresh_interval * 1000)
         self._timer.timeout.connect(self._do_fetch)
         self._timer.start()
 
@@ -580,6 +621,19 @@ class StockMonitor(QMainWindow):
             # 恢复后立即刷新一次
             self._do_fetch()
 
+    def _on_interval_changed(self, text):
+        """刷新间隔下拉框变化时，更新定时器间隔"""
+        try:
+            secs = int(text.replace("秒", ""))
+            self._refresh_interval = secs
+            self._timer.setInterval(secs * 1000)
+            if not self._paused:
+                self._timer.stop()
+                self._timer.start()
+            self._update_status_bar()
+        except Exception:
+            pass
+
     def _start_flash_timer(self):
         self._flash_timer = QTimer(self)
         self._flash_timer.setInterval(500)
@@ -611,7 +665,7 @@ class StockMonitor(QMainWindow):
                 self.code_input.clear()
                 return
             self.stocks.append({"code": code, "upper": None, "lower": None,
-                                     "sell_qty": None, "buy_qty": None,
+                                     "sell_qty": None, "buy_qty": None, "note": None,
                                      "sort_order": len(self.stocks) + 1})
             self.codes = [s["code"] for s in self.stocks]
             save_watchlist(self.stocks)
@@ -643,7 +697,7 @@ class StockMonitor(QMainWindow):
     def _update_status_bar(self):
         try:
             self.statusBar().showMessage(
-                f"监控 {len(self.codes)} 只股票  |  刷新间隔 {config.REFRESH_INTERVAL} 秒  |  双击 # 列输入序号排序"
+                f"监控 {len(self.codes)} 只股票  |  刷新间隔 {self._refresh_interval} 秒  |  双击 # 列输入序号排序"
             )
         except Exception:
             pass
@@ -795,6 +849,7 @@ class StockMonitor(QMainWindow):
                 sell_qty_str = formatter.fmt_qty(cfg.get("sell_qty")) if cfg.get("sell_qty") is not None else ""
                 lower_str   = self._fmt_price(cfg.get("lower"))  if cfg.get("lower")  is not None else ""
                 buy_qty_str  = formatter.fmt_qty(cfg.get("buy_qty"))  if cfg.get("buy_qty")  is not None else ""
+                note_str    = str(cfg.get("note", "")) if cfg.get("note") else ""
 
                 sell_alert_str = alert_info.get("sell", "")
                 buy_alert_str  = alert_info.get("buy",  "")
@@ -848,6 +903,11 @@ class StockMonitor(QMainWindow):
                 buy_it.setForeground(QColor("#33FF99") if buy_alert_str else QColor("#EEEEEE"))
                 buy_it.setFlags(buy_it.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(r_idx, self.COL_BUY_ALT, buy_it)
+
+                # 笔记列（自由编辑文本）
+                note_it = make_editable(note_str, align=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                note_it.setForeground(QColor("#CCCCCC"))
+                self.table.setItem(r_idx, self.COL_NOTE, note_it)
 
                 self.table.setRowHeight(r_idx, 34)
 
