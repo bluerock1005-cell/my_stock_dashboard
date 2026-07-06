@@ -13,9 +13,20 @@ env/
 
 # IDE
 .idea/
+.vscode/
 *.swp
 *.swo
 
 # OS
 .DS_Store
 Thumbs.db
+*.lnk
+
+# Local logs
+fetcher.log
+
+# Local Windows/IDE files
+.vscode/
+*.lnk
+fetcher.log
+

@@ -123,6 +123,8 @@ class FetchThread(QThread):
             df, error_msg = fetcher.fetch_stocks_with_progress(self.codes, self.progress.emit)
         except Exception as e:
             import pandas as pd
+            import traceback
+            traceback.print_exc()
             df, error_msg = pd.DataFrame(), f"线程异常: {e}"
             self.progress.emit(100, "出错")
         self.data_ready.emit(df, error_msg)

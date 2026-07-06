@@ -5,7 +5,8 @@
     "lower": 0.55,
     "sell_qty": 18000,
     "buy_qty": 9100,
-    "sort_order": 1
+    "sort_order": 1,
+    "note": null
   },
   {
     "code": "513180",
@@ -13,7 +14,8 @@
     "lower": 0.491,
     "sell_qty": 24000,
     "buy_qty": 30200,
-    "sort_order": 2
+    "sort_order": 2,
+    "note": null
   },
   {
     "code": "159920",
@@ -21,7 +23,8 @@
     "lower": 1.312,
     "sell_qty": null,
     "buy_qty": 3900,
-    "sort_order": 3
+    "sort_order": 3,
+    "note": null
   },
   {
     "code": "513050",
@@ -29,23 +32,26 @@
     "lower": null,
     "sell_qty": 8000,
     "buy_qty": null,
-    "sort_order": 4
+    "sort_order": 4,
+    "note": null
   },
   {
     "code": "512170",
-    "upper": 0.317,
-    "lower": 0.269,
-    "sell_qty": 17000,
-    "buy_qty": 26100,
-    "sort_order": 5
+    "upper": 0.345,
+    "lower": 0.292,
+    "sell_qty": 13000,
+    "buy_qty": 20600,
+    "sort_order": 5,
+    "note": null
   },
   {
     "code": "159928",
-    "upper": 0.6292,
-    "lower": 0.567,
-    "sell_qty": 8600,
-    "buy_qty": 11500,
-    "sort_order": 6
+    "upper": 0.662,
+    "lower": 0.597,
+    "sell_qty": 7500,
+    "buy_qty": 10100,
+    "sort_order": 6,
+    "note": null
   },
   {
     "code": "512880",
@@ -53,7 +59,8 @@
     "lower": 1.031,
     "sell_qty": 0,
     "buy_qty": 4900,
-    "sort_order": 7
+    "sort_order": 7,
+    "note": null
   },
   {
     "code": "512980",
@@ -61,7 +68,8 @@
     "lower": 0.776,
     "sell_qty": null,
     "buy_qty": 7100,
-    "sort_order": 8
+    "sort_order": 8,
+    "note": null
   },
   {
     "code": "512070",
@@ -69,7 +77,8 @@
     "lower": 0.744,
     "sell_qty": 4300,
     "buy_qty": 6100,
-    "sort_order": 9
+    "sort_order": 9,
+    "note": null
   },
   {
     "code": "518800",
@@ -77,7 +86,8 @@
     "lower": null,
     "sell_qty": null,
     "buy_qty": null,
-    "sort_order": 10
+    "sort_order": 10,
+    "note": null
   },
   {
     "code": "159870",
@@ -85,7 +95,8 @@
     "lower": 0.835,
     "sell_qty": 1800,
     "buy_qty": 2600,
-    "sort_order": 11
+    "sort_order": 11,
+    "note": null
   },
   {
     "code": "159547",
@@ -93,14 +104,25 @@
     "lower": 1.03,
     "sell_qty": null,
     "buy_qty": null,
-    "sort_order": 12
+    "sort_order": 12,
+    "note": null
   },
   {
     "code": "515180",
     "upper": null,
-    "lower": null,
+    "lower": 1.19,
     "sell_qty": null,
     "buy_qty": null,
-    "sort_order": 13
+    "sort_order": 13,
+    "note": null
+  },
+  {
+    "code": "159201",
+    "upper": null,
+    "lower": 0.997,
+    "sell_qty": null,
+    "buy_qty": null,
+    "note": null,
+    "sort_order": 14
   }
 ]
